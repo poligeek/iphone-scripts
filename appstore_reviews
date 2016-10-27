@@ -21,13 +21,9 @@ require 'rubygems'
 require 'hpricot'
 require 'httparty'
 
-# MODIFY YOUR NATIVE LANGUAGE
-NATIVE_LANGUAGE = 'en'
-
 # MODIFY THIS HASH WITH YOUR APP SET (grab the itunes store urls & pull the id params)
 software = {
-  # http://phobos.apple.com/WebObjects/MZStore.woa/wa/viewSoftware?id=289923007&mt=8
-  'Domain Scout' => 289923007,
+  'Poligeek' => 368413020,
 }
 
 stores = [
@@ -114,62 +110,36 @@ stores = [
 
 DEBUG = false
 
-TRANSLATE_URL = "http://ajax.googleapis.com/ajax/services/language/translate?"
-
-def translate(opts)
-  from = opts[:from] == 'auto' ? '' : opts[:from]  # replace 'auto' with blank per Translate API
-  to   = opts[:to]
-
-  result = HTTParty.get(TRANSLATE_URL, :query => { :v => '1.0', :langpair => "#{from}|#{to}", :q => opts[:text] })
-
-  raise result['responseDetails'] if result['responseStatus'] != 200
-  return result['responseData']['translatedText']
-end
-
 # return a rating/subject/author/body hash
 def fetch_reviews(software_id, store)
   reviews = []
-  
+
   # TODO: parameterize type=Purple+Software
-  cmd = sprintf(%{curl -s -A "iTunes/9.2 (Macintosh; U; Mac OS X 10.6" -H "X-Apple-Store-Front: %s-1" } <<
-                %{'https://itunes.apple.com/WebObjects/MZStore.woa/wa/viewContentsUserReviews?id=%s&} <<
-                %{pageNumber=0&sortOrdering=1&type=Purple+Software' | xmllint --format --recover - 2>/dev/null},
+  cmd = sprintf(%{curl -s -L -k -H "X-Apple-Store-Front: %s,5" -H "X-Apple-Tz: 3600" -A "iTunes/9.2.1 (Macintosh; Intel Mac OS X 10.5.8) AppleWebKit/533.16" 'http://ax.phobos.apple.com.edgesuite.net/WebObjects/MZStore.woa/wa/viewContentsUserReviews?id=%s&pageNumber=0&sortOrdering=2&type=Podcast' | xmllint --format --recover - 2>/dev/null},
                 store[:id],
                 software_id)
 
   rawxml = `#{cmd}`
-  
+
   if defined?(DEBUG) && DEBUG == true
     open("appreview.#{software_id}.#{store[:id]}.xml", 'w') { |f| f.write(rawxml) }
   end
-  
+
   doc = Hpricot.XML(rawxml)
 
-  doc.search("Document > View > ScrollView > VBoxView > View > MatrixView > VBoxView:nth(0) > VBoxView > VBoxView").each do |e|
+  doc.search("Document > View > ScrollView > VBoxView > View > MatrixView > VBoxView > VBoxView > VBoxView").each do |e|
     review = {}
-    
+
     strings = (e/:SetFontStyle)
     meta    = strings[2].inner_text.split(/\n/).map { |x| x.strip }
 
     # Note: Translate is sensitive to spaces around punctuation, so we make sure br's connote space.
-    review[:rating]  = e.inner_html.match(/alt="(\d+) star(s?)"/)[1].to_i
+    review[:rating]  = e.inner_html.match(/alt="(\d+) /)[1].to_i
     review[:author]  = meta[3]
-    review[:version] = meta[7][/Version (.*)/, 1] unless meta[7].nil?
     review[:date]    = meta[10]
     review[:subject] = strings[0].inner_text.strip
     review[:body]    = strings[3].inner_html.gsub("<br />", "\n").strip
-    
-    if ! store[:language].empty? && store[:language] != NATIVE_LANGUAGE
-      begin
-        review[:subject] = translate( :from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:subject] )
-        review[:body]    = translate( :from => store[:language], :to => NATIVE_LANGUAGE, :text => review[:body] )
-      rescue => e
-        if DEBUG
-          puts "** oops, cannot translate #{store[:name]}/#{store[:language]} => #{NATIVE_LANGUAGE}: #{e.message}"
-        end
-      end
-    end
-    
+
     reviews << review
   end
 
@@ -178,18 +148,18 @@ end
 
 # a simple command-line presentation
 software.keys.sort.each do |software_key|
-  puts "== App: #{software_key}"
+  puts "== Podcast: #{software_key}"
 
   stores.sort_by { |a| a[:name] }.each do |store|
     reviews = fetch_reviews(software[software_key], store)
 
     if reviews.any?
       puts "=== Store: #{store[:name]}"
-      
+
       reviews.each_with_index do |review, index|
-        puts sprintf(%{%s %s, "%s", by %s, for version %s, on %s},
+        puts sprintf(%{%s %s, "%s", by %s, on %s},
           review[:rating], review[:rating] > 1 ? "stars" : "star", review[:subject],
-          review[:author], review[:version], review[:date])
+          review[:author], review[:date])
         puts review[:body]
         puts "--\n" if index + 1 < reviews.size
       end
